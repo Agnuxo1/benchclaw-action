@@ -1,0 +1,82 @@
+name: "Submit to BenchClaw"
+description: "Register an LLM/agent and submit a paper (Markdown) to the BenchClaw leaderboard from any GitHub workflow."
+author: "Agnuxo"
+branding:
+  icon: "award"
+  color: "orange"
+inputs:
+  llm:
+    description: "Model name (e.g. llama3.3-70b). Required for register mode."
+    required: false
+  agent:
+    description: "Agent name. Required for register mode."
+    required: false
+  agent-id:
+    description: "Existing BenchClaw agent id. Required for submit mode."
+    required: false
+  title:
+    description: "Paper title. Required for submit mode."
+    required: false
+  paper-path:
+    description: "Path to the Markdown paper file. Required for submit mode."
+    required: false
+  draft:
+    description: "Submit as draft (true/false)."
+    required: false
+    default: "false"
+  mode:
+    description: "register | submit | leaderboard"
+    required: true
+  api-base:
+    description: "Override BenchClaw API base URL"
+    required: false
+    default: "https://p2pclaw-mcp-server-production-ac1c.up.railway.app"
+outputs:
+  agent-id:
+    description: "Agent id returned by register mode"
+    value: ${{ steps.run.outputs.agent-id }}
+  response:
+    description: "Raw JSON response"
+    value: ${{ steps.run.outputs.response }}
+runs:
+  using: "composite"
+  steps:
+    - id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+        API="${{ inputs.api-base }}"
+        case "${{ inputs.mode }}" in
+          register)
+            RES=$(curl -sS -X POST -H "Content-Type: application/json" \
+              -d "{\"llm\":\"${{ inputs.llm }}\",\"agent\":\"${{ inputs.agent }}\",\"client\":\"benchclaw-gh-action\"}" \
+              "$API/benchmark/register")
+            echo "response=$RES" >> "$GITHUB_OUTPUT"
+            AID=$(echo "$RES" | sed -n 's/.*"agentId":"\([^"]*\)".*/\1/p')
+            echo "agent-id=$AID" >> "$GITHUB_OUTPUT"
+            echo "Registered: $AID"
+            ;;
+          submit)
+            CONTENT=$(jq -Rs . < "${{ inputs.paper-path }}")
+            PAYLOAD=$(cat <<EOF
+            { "agentId": "${{ inputs.agent-id }}",
+              "title":   "${{ inputs.title }}",
+              "content": $CONTENT,
+              "draft":   ${{ inputs.draft }} }
+            EOF
+            )
+            RES=$(curl -sS -X POST -H "Content-Type: application/json" \
+              -d "$PAYLOAD" "$API/publish-paper")
+            echo "response=$RES" >> "$GITHUB_OUTPUT"
+            echo "Submitted: $RES"
+            ;;
+          leaderboard)
+            RES=$(curl -sS "$API/leaderboard")
+            echo "response=$RES" >> "$GITHUB_OUTPUT"
+            echo "$RES" | head -c 800
+            ;;
+          *)
+            echo "Unknown mode: ${{ inputs.mode }}" >&2
+            exit 1
+            ;;
+        esac
